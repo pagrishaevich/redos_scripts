@@ -1,24 +1,44 @@
 # redos_scripts
 
-Utility scripts for RED OS 8 administration.
+Набор административных скриптов для РЕД ОС 8.
 
-## Included scripts
+## Скрипты
 
-- `mount_folders_redos8.sh` - creates local bind mounts and persists them in `/etc/fstab`.
+- `mount_folders_redos8.sh` - bind-монтирование локальных директорий с сохранением в `/etc/fstab`.
+- `mount-manager.sh` - интерактивное управление CIFS/SMB-шарами: монтирование, размонтирование, пресеты и записи в `/etc/fstab`.
+- `usb-guard.sh` - управление блокировкой USB-накопителей через udev (`UDISKS_IGNORE` и `authorized`) и белые списки.
 
-## Usage
-
-1. Edit mount pairs in `MOUNTS` inside `mount_folders_redos8.sh`.
-2. Run with root privileges:
+## Быстрый запуск
 
 ```bash
 sudo ./mount_folders_redos8.sh
+sudo ./mount-manager.sh --help
+sudo ./usb-guard.sh --help
 ```
 
-The script creates a timestamped backup of `/etc/fstab`, updates missing mount entries, mounts folders immediately, and validates configuration via `mount -a`.
+## Кратко по каждому скрипту
 
-## Notes
+### mount_folders_redos8.sh
 
-- Test on a non-production host first.
-- Keep a console session open while applying mount changes.
-- If needed, restore backup from `/etc/fstab.bak.YYYY-MM-DD_HH-MM-SS`.
+1. Отредактируйте пары директорий в массиве `MOUNTS`.
+2. Запустите от root.
+
+Скрипт делает резервную копию `/etc/fstab`, добавляет недостающие bind-записи, выполняет монтирование и проверку через `mount -a`.
+
+### mount-manager.sh
+
+- Поддерживает интерактивное меню и запуск через флаги (`--add`, `--remove`, `--list`, `--load`, `--mount-all`).
+- Создает файл учетных данных SMB c правами `600`.
+- Может сохранять пресеты в `/etc/mount-manager.conf`.
+
+### usb-guard.sh
+
+- `--scan` сканирует подключенные USB-накопители и их атрибуты.
+- `--whitelist` и `--whitelist-auth` создают белые списки по атрибутам устройства.
+- `--block-all` и `--unblock` включают/выключают блокировку USB-накопителей.
+
+## Важно
+
+- Все скрипты требуют root-прав.
+- Перед изменением политики монтирования и USB-регулирования протестируйте на стенде.
+- После изменений udev-правил рекомендуется переподключить USB-устройства.
