@@ -54,8 +54,8 @@ sanitize_name() {
     local value="$1"
 
     value=$(echo "$value" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/_/g')
-    value=${value##_}
-    value=${value%%_}
+    # Удаляем ведущие/хвостовые подчёркивания от замены спецсимволов
+    value=$(echo "$value" | sed 's/^_+//;s/_+$//')
     echo "$value"
 }
 

@@ -122,7 +122,9 @@ build_attr_rule() {
     [[ -n "$maxpower" ]] && rule+="ATTRS{bMaxPower}==\"${maxpower}\","
 
     [[ -n "$rule" ]] || return 1
-    echo "${rule}${action}"
+    # Удаляем trailing comma перед action
+    rule=${rule%,}
+    echo "${rule},${action}"
 }
 
 # ─── Безопасное чтение атрибута udev ─────────────────────────────────────

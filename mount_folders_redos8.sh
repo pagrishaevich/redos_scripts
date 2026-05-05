@@ -25,9 +25,17 @@ fstab_has_entry() {
   local src="$1"
   local dst="$2"
 
-  while read -r fs_src fs_dst fs_type fs_opts _; do
-    [[ -n "${fs_src:-}" ]] || continue
-    [[ "$fs_src" == \#* ]] && continue
+  while read -r line; do
+    # Убираем комментарии и пустые строки
+    [[ -n "${line// }" ]] || continue
+    line="${line%%[[:space:]]#*}"
+    [[ -n "${line// }" ]] || continue
+    
+    # Парсим только первые 6 полей
+    read -r fs_src fs_dst fs_type fs_opts _ < <(echo "$line")
+    
+    [[ -n "$fs_src" ]] || continue
+    [[ "$fs_src" == "#"* ]] && continue
     if [[ "$fs_src" == "$src" && "$fs_dst" == "$dst" && "$fs_type" == "none" && ",$fs_opts," == *",bind,"* ]]; then
       return 0
     fi
