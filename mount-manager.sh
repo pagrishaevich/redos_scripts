@@ -42,6 +42,29 @@ FSTAB="/etc/fstab"
 CREDENTIALS_DIR="/root"
 CONFIG_FILE="/etc/mount-manager.conf"
 
+# ─── Вспомогательные функции ──────────────────────────────────────────────
+backup_fstab() {
+    local backup="${FSTAB}.bak.$(date +%Y%m%d_%H%M%S)"
+
+    cp -a "$FSTAB" "$backup"
+    echo -e "${YELLOW}Резервная копия /etc/fstab: ${backup}${NC}"
+}
+
+sanitize_name() {
+    local value="$1"
+
+    value=$(echo "$value" | tr '[:upper:]' '[:lower:]' | sed 's/[^a-z0-9._-]/_/g')
+    value=${value##_}
+    value=${value%%_}
+    echo "$value"
+}
+
+validate_mount_name() {
+    local mount_name="$1"
+
+    [[ -n "$mount_name" && "$mount_name" != "." && "$mount_name" != ".." && "$mount_name" =~ ^[A-Za-z0-9._-]+$ ]]
+}
+
 # ─── Проверка прав root ──────────────────────────────────────────────────
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -72,7 +95,14 @@ create_credentials_file() {
     local cred_file="${4:-}"
 
     if [[ -z "$cred_file" ]]; then
-        cred_file="${CREDENTIALS_DIR}/.smbuser_$(echo "$username" | tr '[:upper:]' '[:lower:]')"
+        local safe_username
+        safe_username=$(sanitize_name "$username")
+        cred_file="${CREDENTIALS_DIR}/.smbuser_${safe_username}"
+    fi
+
+    if [[ "$password" == *$'\n'* || "$username" == *$'\n'* || "$domain" == *$'\n'* ]]; then
+        echo -e "${RED}Ошибка: имя пользователя, пароль и домен не должны содержать перевод строки${NC}" >&2
+        return 1
     fi
 
     cat > "$cred_file" <<EOF
@@ -98,7 +128,13 @@ mount_share() {
     local add_to_fstab="$6"
 
     local mount_point="${MOUNT_BASE}/${mount_name}"
-    local extra_opts="nobrl,iocharset=utf8,file_mode=0777,dir_mode=0777"
+    local extra_opts="nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
+
+    if ! validate_mount_name "$mount_name"; then
+        echo -e "${RED}Ошибка: неверное имя точки монтирования: ${mount_name}${NC}"
+        echo "Разрешены только буквы, цифры, точка, подчёркивание и дефис"
+        return 1
+    fi
 
     if [[ "$is_domain" == "1" ]]; then
         extra_opts="${extra_opts},nofail"
@@ -134,7 +170,7 @@ add_to_fstab_entry() {
     local is_domain="$5"
 
     local mount_point="${MOUNT_BASE}/${mount_name}/"
-    local extra_opts="nobrl,iocharset=utf8,file_mode=0777,dir_mode=0777"
+    local extra_opts="nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
 
     if [[ "$is_domain" == "1" ]]; then
         extra_opts="${extra_opts},nofail"
@@ -142,11 +178,12 @@ add_to_fstab_entry() {
 
     local fstab_entry="//${server}/${share} ${mount_point} cifs credentials=${cred_file},${extra_opts} 0 0"
 
-    if grep -q "^//${server}/${share}" "$FSTAB" 2>/dev/null; then
+    if grep -Fq "//${server}/${share} ${mount_point} cifs" "$FSTAB" 2>/dev/null; then
         echo -e "${YELLOW}Запись уже существует в /etc/fstab${NC}"
         return 0
     fi
 
+    backup_fstab
     echo "$fstab_entry" >> "$FSTAB"
     echo -e "${GREEN}Запись добавлена в /etc/fstab${NC}"
 }
@@ -155,6 +192,11 @@ add_to_fstab_entry() {
 unmount_share() {
     local mount_name="$1"
     local mount_point="${MOUNT_BASE}/${mount_name}"
+
+    if ! validate_mount_name "$mount_name"; then
+        echo -e "${RED}Ошибка: неверное имя точки монтирования: ${mount_name}${NC}"
+        return 1
+    fi
 
     if [[ ! -d "$mount_point" ]]; then
         echo -e "${RED}Точка монтирования не найдена: ${mount_point}${NC}"
@@ -165,8 +207,9 @@ unmount_share() {
         echo -e "${YELLOW}Не смонтировано: ${mount_point}${NC}"
         read -rp "Удалить директорию ${mount_point}? (y/n): " confirm_rm
         if [[ "$confirm_rm" == "y" || "$confirm_rm" == "Y" ]]; then
-            rm -rf "$mount_point"
-            echo -e "${GREEN}Директория удалена: ${mount_point}${NC}"
+            rmdir "$mount_point" 2>/dev/null && echo -e "${GREEN}Директория удалена: ${mount_point}${NC}" || {
+                echo -e "${YELLOW}Директория не пуста, пропускаю удаление${NC}"
+            }
         fi
         return 0
     fi
@@ -185,8 +228,7 @@ unmount_share() {
 
     if [[ -d "$mount_point" ]]; then
         rmdir "$mount_point" 2>/dev/null && echo -e "${GREEN}Директория удалена: ${mount_point}${NC}" || {
-            echo -e "${YELLOW}Директория не пуста, удаляем принудительно...${NC}"
-            rm -rf "$mount_point" && echo -e "${GREEN}Директория удалена: ${mount_point}${NC}" || echo -e "${RED}Не удалось удалить директорию${NC}"
+            echo -e "${YELLOW}Директория не пуста, оставлена без удаления: ${mount_point}${NC}"
         }
     fi
 }
@@ -202,7 +244,7 @@ list_mounts() {
             echo -e "  ${GREEN}●${NC} $line"
             ((count++)) || true
         fi
-    done < <(mount | grep cifs)
+    done < <(mount | grep cifs || true)
 
     if [[ $count -eq 0 ]]; then
         echo -e "  ${YELLOW}Нет смонтированных CIFS шар${NC}"
@@ -248,7 +290,8 @@ remove_from_fstab() {
         return 1
     fi
 
-    if grep -q "${mount_point}" "$FSTAB"; then
+    if grep -Fq " ${mount_point} cifs " "$FSTAB"; then
+        backup_fstab
         sed -i "\|${mount_point}|d" "$FSTAB"
         echo -e "${GREEN}Запись удалена из /etc/fstab${NC}"
     else
@@ -298,7 +341,7 @@ load_from_config() {
     local total
     total=$(grep -c '^\[' "$CONFIG_FILE")
 
-    if [[ "$preset_num" -lt 1 || "$preset_num" -gt "$total" ]]; then
+    if [[ ! "$preset_num" =~ ^[0-9]+$ || "$preset_num" -lt 1 || "$preset_num" -gt "$total" ]]; then
         echo -e "${RED}Неверный номер${NC}"
         return 0
     fi
@@ -360,6 +403,11 @@ interactive_add() {
     read -rp "IP/имя сервера: " server
     read -rp "Имя шары: " share
     read -rp "Имя точки монтирования (будет в /mnt/): " mount_name
+    if ! validate_mount_name "$mount_name"; then
+        echo -e "${RED}Ошибка: неверное имя точки монтирования${NC}"
+        echo "Разрешены только буквы, цифры, точка, подчёркивание и дефис"
+        return 1
+    fi
     read -rp "Имя пользователя: " username
     read -rsp "Пароль: " password
     echo ""
@@ -404,7 +452,7 @@ interactive_remove() {
             name=$(basename "$mp")
             mounts+=("$name")
         fi
-    done < <(mount | grep cifs)
+    done < <(mount | grep cifs || true)
 
     if [[ ${#mounts[@]} -eq 0 ]]; then
         echo -e "${YELLOW}Нет смонтированных шар${NC}"
@@ -418,7 +466,7 @@ interactive_remove() {
     echo ""
 
     read -rp "Выберите для размонтирования (номер): " num
-    if [[ $num -ge 1 && $num -le ${#mounts[@]} ]]; then
+    if [[ "$num" =~ ^[0-9]+$ && $num -ge 1 && $num -le ${#mounts[@]} ]]; then
         local selected="${mounts[$((num-1))]}"
 
         read -rp "Размонтировать '${selected}'? (y/n): " confirm

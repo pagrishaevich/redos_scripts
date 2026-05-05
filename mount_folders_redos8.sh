@@ -21,6 +21,30 @@ MOUNTS=(
 FSTAB="/etc/fstab"
 BACKUP="/etc/fstab.bak.$(date +%F_%H-%M-%S)"
 
+fstab_has_entry() {
+  local src="$1"
+  local dst="$2"
+
+  while read -r fs_src fs_dst fs_type fs_opts _; do
+    [[ -n "${fs_src:-}" ]] || continue
+    [[ "$fs_src" == \#* ]] && continue
+    if [[ "$fs_src" == "$src" && "$fs_dst" == "$dst" && "$fs_type" == "none" && ",$fs_opts," == *",bind,"* ]]; then
+      return 0
+    fi
+  done < "$FSTAB"
+
+  return 1
+}
+
+is_bind_mounted() {
+  local src="$1"
+  local dst="$2"
+  local current_src
+
+  current_src=$(findmnt -rn --target "$dst" --output SOURCE 2>/dev/null || true)
+  [[ "$current_src" == "$src" ]]
+}
+
 cp -a "$FSTAB" "$BACKUP"
 echo "Резервная копия fstab: $BACKUP"
 
@@ -40,7 +64,7 @@ for pair in "${MOUNTS[@]}"; do
   line="$src $dst none bind 0 0"
 
   # Если записи для source+target еще нет — добавляем
-  if ! grep -qsE "^[[:space:]]*${src//\//\\/}[[:space:]]+${dst//\//\\/}[[:space:]]+none[[:space:]]+bind([[:space:],].*)?$" "$FSTAB"; then
+  if ! fstab_has_entry "$src" "$dst"; then
     echo "$line" >> "$FSTAB"
     echo "Добавлено в fstab: $line"
   else
@@ -48,7 +72,7 @@ for pair in "${MOUNTS[@]}"; do
   fi
 
   # Монтируем сразу, если еще не смонтировано
-  if ! findmnt -rn -S "$src" -T "$dst" >/dev/null 2>&1; then
+  if ! is_bind_mounted "$src" "$dst"; then
     mount --bind "$src" "$dst"
     echo "Смонтировано: $src -> $dst"
   else
@@ -57,6 +81,14 @@ for pair in "${MOUNTS[@]}"; do
 done
 
 echo
-echo "Проверка fstab:"
-mount -a
+echo "Проверка добавленных bind-монтирований:"
+for pair in "${MOUNTS[@]}"; do
+  src="${pair%% *}"
+  dst="${pair##* }"
+
+  [[ -d "$src" ]] || continue
+  if ! is_bind_mounted "$src" "$dst"; then
+    mount --bind "$src" "$dst"
+  fi
+done
 echo "Готово."
