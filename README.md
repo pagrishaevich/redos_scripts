@@ -19,6 +19,7 @@
 | `mount_folders_redos8.sh` | Bind-монтирование локальных директорий с добавлением записей в `/etc/fstab`. |
 | `mount-manager.sh` | Интерактивное управление CIFS/SMB-шарами, credentials-файлами, пресетами и `/etc/fstab`. |
 | `usb-guard.sh` | Блокировка USB-накопителей через `udev`, `UDISKS_IGNORE` и `authorized`, с поддержкой белых списков. |
+| `sleep-guard-redos8.sh` | Отключение спящего режима на рабочих станциях РЕД ОС 8/MATE, диагностика sleep-событий и откат изменений. |
 
 ## Требования
 
@@ -35,6 +36,7 @@ chmod +x *.sh
 sudo ./mount_folders_redos8.sh
 sudo ./mount-manager.sh --help
 sudo ./usb-guard.sh --help
+sudo ./sleep-guard-redos8.sh --help
 ```
 
 Перед запуском обязательно прочитайте раздел конкретного скрипта ниже.
@@ -132,6 +134,49 @@ sudo ./usb-guard.sh --show
 ```text
 /etc/udev/rules.d/99-usb.rules
 /usr/bin/remove_usb.sh
+```
+
+## sleep-guard-redos8.sh
+
+Скрипт предназначен для рабочих станций РЕД ОС 8, которые самопроизвольно уходят в режим сна `suspend` и из-за этого теряют сеть. Он не меняет остальные скрипты проекта и работает только с настройками сна.
+
+Команды:
+
+```bash
+sudo ./sleep-guard-redos8.sh --apply --user tvmedzhidova
+sudo ./sleep-guard-redos8.sh --status
+sudo ./sleep-guard-redos8.sh --collect-logs
+sudo ./sleep-guard-redos8.sh --undo
+```
+
+Что делает `--apply`:
+
+- маскирует `sleep.target`, `suspend.target`, `hibernate.target`, `hybrid-sleep.target`;
+- создаёт `/etc/systemd/logind.conf.d/99-redos-no-sleep.conf` с игнорированием событий сна;
+- перезапускает `systemd-logind`;
+- при указании `--user` отключает таймеры сна и гашения экрана в MATE через `gsettings`;
+- не отключает SELinux автоматически.
+
+Диагностика:
+
+```bash
+sudo ./sleep-guard-redos8.sh --collect-logs
+```
+
+Команда собирает логи `systemd-logind`, sleep/suspend-события, состояние targets, inhibitors, SELinux и список задач Kaspersky KESL, если `kesl-control` установлен.
+
+SELinux и Kaspersky:
+
+В логах может встречаться конфликт `systemd-sleep` с Kaspersky KESL, но это не обязательно причина ухода в сон. Скрипт проверяет этот след диагностически. Временный перевод SELinux в permissive доступен только явным флагом:
+
+```bash
+sudo ./sleep-guard-redos8.sh --apply --user tvmedzhidova --selinux-permissive
+```
+
+Откат системных изменений:
+
+```bash
+sudo ./sleep-guard-redos8.sh --undo
 ```
 
 ## Безопасность
