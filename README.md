@@ -99,14 +99,15 @@ sudo ./mount-manager.sh --mount-all
 2. Запускайте скрипт через `sudo` из-под доменного пользователя, чтобы он смог определить пользователя по `SUDO_USER`.
 3. У пользователя должен быть Kerberos-билет. Если `klist` не найдёт билет, скрипт предложит выполнить `kinit user@DOMAIN`.
 4. При выборе Kerberos-режима пароль не записывается в credentials-файл, а CIFS монтируется с `sec=krb5,cruid=<uid>,multiuser`.
-5. Запись в `/etc/fstab` для Kerberos-режима можно добавить, но она требует Kerberos-билет пользователя после входа в систему. На ранней загрузке системы такая запись может не смонтироваться.
+5. Для Kerberos используйте DNS-имя или FQDN SMB-сервера, а не IP-адрес. Если введён IP, скрипт попробует найти имя через `getent hosts`; без DNS-имени монтирование будет остановлено до вызова `mount.cifs`.
+6. Запись в `/etc/fstab` для Kerberos-режима можно добавить, но она требует Kerberos-билет пользователя после входа в систему. На ранней загрузке системы такая запись может не смонтироваться.
 
 Зависимости:
 
 ```bash
 sudo dnf install cifs-utils
 sudo dnf install samba-client
-sudo dnf install krb5-workstation realmd samba-common-tools
+sudo dnf install krb5-workstation realmd samba-common-tools keyutils
 ```
 
 `samba-client` нужен только для диагностики через `smbclient`. Пакеты Kerberos и `realmd` нужны только для доменного сценария.

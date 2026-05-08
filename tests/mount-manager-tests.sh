@@ -56,8 +56,36 @@ test_kerberos_principal_uses_domain_suffix() {
   assert_equals "ivan@EXAMPLE.LOCAL" "$principal"
 }
 
+test_kerberos_server_ip_resolves_to_fqdn() {
+  getent() {
+    if [[ "$1" == "hosts" && "$2" == "10.31.8.166" ]]; then
+      echo "10.31.8.166 fs01.yg.loc fs01"
+      return 0
+    fi
+    return 1
+  }
+
+  local server
+
+  MOUNT_MANAGER_TESTING=1 source "$SCRIPT"
+  server="$(resolve_kerberos_server_name "10.31.8.166")"
+
+  assert_equals "fs01.yg.loc" "$server"
+}
+
+test_kerberos_server_name_keeps_hostname() {
+  local server
+
+  MOUNT_MANAGER_TESTING=1 source "$SCRIPT"
+  server="$(resolve_kerberos_server_name "fs01.yg.loc")"
+
+  assert_equals "fs01.yg.loc" "$server"
+}
+
 test_kerberos_mount_options_use_current_user_uid
 test_domain_mode_detects_realm_membership
 test_kerberos_principal_uses_domain_suffix
+test_kerberos_server_ip_resolves_to_fqdn
+test_kerberos_server_name_keeps_hostname
 
 echo "PASS: mount-manager"

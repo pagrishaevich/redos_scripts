@@ -89,6 +89,10 @@ check_dependencies() {
     if ! command -v klist &>/dev/null; then
         echo -e "${YELLOW}Предупреждение: klist не найден (для доменной Kerberos-авторизации может потребоваться krb5-workstation)${NC}"
     fi
+
+    if ! command -v cifs.upcall &>/dev/null; then
+        echo -e "${YELLOW}Предупреждение: cifs.upcall не найден (для sec=krb5 может потребоваться пакет keyutils)${NC}"
+    fi
 }
 
 # ─── Доменная авторизация текущего пользователя ─────────────────────────
@@ -184,6 +188,44 @@ build_kerberos_mount_options() {
     local user_uid="$1"
 
     echo "sec=krb5,cruid=${user_uid},multiuser,nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
+}
+
+is_ipv4_address() {
+    local value="$1"
+
+    [[ "$value" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]
+}
+
+resolve_kerberos_server_name() {
+    local server="$1"
+
+    if ! is_ipv4_address "$server"; then
+        echo "$server"
+        return 0
+    fi
+
+    local resolved=""
+    if command -v getent &>/dev/null; then
+        resolved=$(getent hosts "$server" 2>/dev/null | awk '{
+            for (i = 2; i <= NF; i++) {
+                if ($i ~ /\./) {
+                    print $i
+                    exit
+                }
+            }
+            if (NF >= 2) {
+                print $2
+            }
+        }')
+    fi
+
+    if [[ -z "$resolved" ]]; then
+        echo -e "${RED}Kerberos-монтирование по IP-адресу невозможно без DNS-имени сервера${NC}" >&2
+        echo "Укажите имя сервера/FQDN вместо ${server} или настройте обратное DNS-разрешение" >&2
+        return 1
+    fi
+
+    echo "$resolved"
 }
 
 # ─── Создание файла учётных данных ───────────────────────────────────────
@@ -581,6 +623,16 @@ interactive_add() {
 
         if ! ensure_kerberos_ticket "$login_user" "$domain"; then
             return 1
+        fi
+
+        local kerberos_server
+        if ! kerberos_server=$(resolve_kerberos_server_name "$server"); then
+            return 1
+        fi
+
+        if [[ "$kerberos_server" != "$server" ]]; then
+            echo -e "${YELLOW}Для Kerberos использую DNS-имя сервера: ${kerberos_server} вместо ${server}${NC}"
+            server="$kerberos_server"
         fi
 
         read -rp "Добавить в /etc/fstab? (y/n): " add_fstab_answer
