@@ -2,13 +2,12 @@
 
 Административные Bash-скрипты для РЕД ОС 8 и совместимых Linux-систем.
 
-Скрипты помогают управлять bind-монтированиями, CIFS/SMB-шарами и политикой доступа к USB-накопителям. Все операции рассчитаны на запуск администратором и могут изменять системные файлы.
+Скрипты помогают управлять CIFS/SMB-шарами, политикой доступа к USB-накопителям и настройками сна. Все операции рассчитаны на запуск администратором и могут изменять системные файлы.
 
 ## Исправления
 
 ### v1.1 (2026-05-05)
 
-- **mount_folders_redos8.sh**: исправлена функция `fstab_has_entry` — теперь корректно обрабатывает комментарии в `/etc/fstab` (строки после `#`).
 - **mount-manager.sh**: улучшена функция `sanitize_name` — использует `sed` вместо bash parameter expansion для удаления подчёркиваний, что надёжнее работает с пустыми строками.
 - **usb-guard.sh**: исправлена функция `build_attr_rule` — убран `trailing comma` перед action, что делало udev-правила синтаксически корректными.
 
@@ -16,7 +15,6 @@
 
 | Скрипт | Назначение |
 | --- | --- |
-| `mount_folders_redos8.sh` | Bind-монтирование локальных директорий с добавлением записей в `/etc/fstab`. |
 | `mount-manager.sh` | Интерактивное управление CIFS/SMB-шарами, credentials-файлами, Kerberos-монтированием, пресетами и `/etc/fstab`. |
 | `usb-guard.sh` | Блокировка USB-накопителей через `udev`, `UDISKS_IGNORE` и `authorized`, с поддержкой белых списков. |
 | `sleep-guard-redos8.sh` | Отключение спящего режима на рабочих станциях РЕД ОС 8/MATE, диагностика sleep-событий и откат изменений. |
@@ -33,41 +31,12 @@
 ```bash
 chmod +x *.sh
 
-sudo ./mount_folders_redos8.sh
 sudo ./mount-manager.sh --help
 sudo ./usb-guard.sh --help
 sudo ./sleep-guard-redos8.sh --help
 ```
 
 Перед запуском обязательно прочитайте раздел конкретного скрипта ниже.
-
-## mount_folders_redos8.sh
-
-Скрипт предназначен для bind-монтирования локальных директорий.
-
-Перед запуском отредактируйте массив `MOUNTS` внутри файла:
-
-```bash
-MOUNTS=(
-  "/data/share1 /mnt/share1"
-  "/data/share2 /mnt/share2"
-)
-```
-
-Что делает скрипт:
-
-- проверяет запуск от root;
-- создаёт backup `/etc/fstab` в формате `/etc/fstab.bak.<date>`;
-- создаёт директории назначения;
-- добавляет отсутствующие bind-записи в `/etc/fstab`;
-- монтирует только указанные пары директорий;
-- не запускает общий `mount -a`, чтобы не ломаться из-за чужих проблемных записей в `/etc/fstab`.
-
-Запуск:
-
-```bash
-sudo ./mount_folders_redos8.sh
-```
 
 ## mount-manager.sh
 
@@ -202,7 +171,6 @@ sudo ./sleep-guard-redos8.sh --undo
 ## Проверка Синтаксиса
 
 ```bash
-bash -n mount_folders_redos8.sh
 bash -n mount-manager.sh
 bash -n usb-guard.sh
 bash tests/mount-manager-tests.sh
