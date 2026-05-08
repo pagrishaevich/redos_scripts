@@ -236,6 +236,28 @@ generate_block_all_udisks() {
 }
 
 # ─── Генерация правила UDISKS_IGNORE — белый список ──────────────────────
+generate_udisks_allow_rules() {
+    local serial="$1"
+    local product="$2"
+    local maxpower="$3"
+    local has_rule=0
+
+    if [[ -n "$serial" ]]; then
+        build_attr_rule 'ENV{UDISKS_IGNORE}="0"' "$serial" "" ""
+        has_rule=1
+    fi
+    if [[ -n "$product" ]]; then
+        build_attr_rule 'ENV{UDISKS_IGNORE}="0"' "" "$product" ""
+        has_rule=1
+    fi
+    if [[ -n "$maxpower" ]]; then
+        build_attr_rule 'ENV{UDISKS_IGNORE}="0"' "" "" "$maxpower"
+        has_rule=1
+    fi
+
+    [[ "$has_rule" -eq 1 ]]
+}
+
 generate_whitelist_udisks() {
     local serial="$1"
     local product="$2"
@@ -244,7 +266,7 @@ generate_whitelist_udisks() {
     echo 'ENV{ID_USB_DRIVER}=="usb-storage",ENV{UDISKS_IGNORE}="1"'
     echo 'ENV{ID_USB_DRIVER}=="uas",ENV{UDISKS_IGNORE}="1"'
 
-    build_attr_rule 'ENV{UDISKS_IGNORE}="0"' "$serial" "$product" "$maxpower" || true
+    generate_udisks_allow_rules "$serial" "$product" "$maxpower"
 }
 
 # ─── Генерация правила authorized — белый список ─────────────────────────
@@ -431,7 +453,7 @@ whitelist_udisks() {
     echo ""
 
     local allow_rule
-    if ! allow_rule=$(build_attr_rule 'ENV{UDISKS_IGNORE}="0"' "$serial" "$product" "$maxpower"); then
+    if ! allow_rule=$(generate_udisks_allow_rules "$serial" "$product" "$maxpower"); then
         echo -e "${RED}Не выбран ни один атрибут для белого списка${NC}"
         return 0
     fi
