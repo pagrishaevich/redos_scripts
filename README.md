@@ -17,7 +17,7 @@
 | Скрипт | Назначение |
 | --- | --- |
 | `mount_folders_redos8.sh` | Bind-монтирование локальных директорий с добавлением записей в `/etc/fstab`. |
-| `mount-manager.sh` | Интерактивное управление CIFS/SMB-шарами, credentials-файлами, пресетами и `/etc/fstab`. |
+| `mount-manager.sh` | Интерактивное управление CIFS/SMB-шарами, credentials-файлами, Kerberos-монтированием, пресетами и `/etc/fstab`. |
 | `usb-guard.sh` | Блокировка USB-накопителей через `udev`, `UDISKS_IGNORE` и `authorized`, с поддержкой белых списков. |
 | `sleep-guard-redos8.sh` | Отключение спящего режима на рабочих станциях РЕД ОС 8/MATE, диагностика sleep-событий и откат изменений. |
 
@@ -25,7 +25,7 @@
 
 - РЕД ОС 8 или совместимая Linux-система с Bash.
 - Root-права для всех основных операций.
-- Для CIFS/SMB: `cifs-utils`, опционально `smbclient`.
+- Для CIFS/SMB: `cifs-utils`, опционально `smbclient`; для доменного Kerberos-монтирования нужны `krb5-workstation` и настроенный домен через `realmd`, `sssd` или `winbind`.
 - Для USB-управления: `udev`, `udevadm`, `coreutils`, `grep`, `sed`, `mktemp`, `readlink`; опционально `usbutils`/`lsusb`.
 
 ## Быстрый Старт
@@ -86,20 +86,30 @@ sudo ./mount-manager.sh --mount-all
 Особенности:
 
 - создаёт SMB credentials-файлы в `/root/.smbuser_*` с правами `600`;
+- умеет монтировать доменные SMB-шары через Kerberos-билет текущего пользователя без сохранения пароля;
 - может сохранять пресеты в `/etc/mount-manager.conf`;
 - перед изменением `/etc/fstab` создаёт backup;
 - валидирует имя точки монтирования;
 - использует CIFS-права `file_mode=0770,dir_mode=0770`;
 - не удаляет непустые директории mount-point принудительно.
 
+Доменное монтирование через Kerberos:
+
+1. Компьютер должен быть введён в домен. Скрипт проверяет это через `realm list` или `wbinfo -t`.
+2. Запускайте скрипт через `sudo` из-под доменного пользователя, чтобы он смог определить пользователя по `SUDO_USER`.
+3. У пользователя должен быть Kerberos-билет. Если `klist` не найдёт билет, скрипт предложит выполнить `kinit user@DOMAIN`.
+4. При выборе Kerberos-режима пароль не записывается в credentials-файл, а CIFS монтируется с `sec=krb5,cruid=<uid>,multiuser`.
+5. Запись в `/etc/fstab` для Kerberos-режима можно добавить, но она требует Kerberos-билет пользователя после входа в систему. На ранней загрузке системы такая запись может не смонтироваться.
+
 Зависимости:
 
 ```bash
 sudo dnf install cifs-utils
 sudo dnf install samba-client
+sudo dnf install krb5-workstation realmd samba-common-tools
 ```
 
-`samba-client` нужен только для диагностики через `smbclient`.
+`samba-client` нужен только для диагностики через `smbclient`. Пакеты Kerberos и `realmd` нужны только для доменного сценария.
 
 ## usb-guard.sh
 
@@ -186,6 +196,7 @@ sudo ./sleep-guard-redos8.sh --undo
 - Держите резервный доступ к системе перед изменением `/etc/fstab` или USB-политик.
 - Не коммитьте credentials-файлы, пароли, токены и приватные ключи.
 - `mount-manager.sh` может хранить SMB-пресеты с паролем в `/etc/mount-manager.conf`; файл создаётся с правами `600`, но это всё равно чувствительные данные.
+- В Kerberos-режиме `mount-manager.sh` не сохраняет пароль пользователя, но требует действующий Kerberos-билет.
 
 ## Проверка Синтаксиса
 
@@ -193,6 +204,7 @@ sudo ./sleep-guard-redos8.sh --undo
 bash -n mount_folders_redos8.sh
 bash -n mount-manager.sh
 bash -n usb-guard.sh
+bash tests/mount-manager-tests.sh
 ```
 
 ## Документация Проекта

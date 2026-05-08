@@ -85,6 +85,105 @@ check_dependencies() {
     if ! command -v smbclient &>/dev/null; then
         echo -e "${YELLOW}Предупреждение: smbclient не найден (для диагностики может потребоваться)${NC}"
     fi
+
+    if ! command -v klist &>/dev/null; then
+        echo -e "${YELLOW}Предупреждение: klist не найден (для доменной Kerberos-авторизации может потребоваться krb5-workstation)${NC}"
+    fi
+}
+
+# ─── Доменная авторизация текущего пользователя ─────────────────────────
+get_login_user() {
+    if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]]; then
+        echo "$SUDO_USER"
+    else
+        id -un
+    fi
+}
+
+is_domain_joined() {
+    if command -v realm &>/dev/null && realm list 2>/dev/null | grep -q .; then
+        return 0
+    fi
+
+    if command -v wbinfo &>/dev/null && wbinfo -t &>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+detect_domain_name() {
+    local domain=""
+
+    if command -v realm &>/dev/null; then
+        domain=$(realm list 2>/dev/null | awk 'NF {print $1; exit}')
+    fi
+
+    if [[ -z "$domain" ]] && command -v dnsdomainname &>/dev/null; then
+        domain=$(dnsdomainname 2>/dev/null || true)
+    fi
+
+    if [[ -z "$domain" ]] && command -v hostname &>/dev/null; then
+        domain=$(hostname -d 2>/dev/null || true)
+    fi
+
+    echo "$domain"
+}
+
+build_kerberos_principal() {
+    local username="$1"
+    local domain="$2"
+
+    echo "${username}@${domain^^}"
+}
+
+run_as_login_user() {
+    local username="$1"
+    shift
+
+    if [[ "$(id -un)" == "$username" ]]; then
+        "$@"
+    elif command -v sudo &>/dev/null; then
+        sudo -u "$username" "$@"
+    elif command -v runuser &>/dev/null; then
+        runuser -u "$username" -- "$@"
+    else
+        echo -e "${YELLOW}Не найден sudo или runuser, выполняю команду от текущего пользователя${NC}" >&2
+        "$@"
+    fi
+}
+
+ensure_kerberos_ticket() {
+    local username="$1"
+    local domain="$2"
+    local principal
+    principal=$(build_kerberos_principal "$username" "$domain")
+
+    if ! command -v klist &>/dev/null; then
+        echo -e "${YELLOW}klist не найден, пропускаю проверку Kerberos-билета${NC}"
+        return 0
+    fi
+
+    if run_as_login_user "$username" klist -s; then
+        echo -e "${GREEN}Kerberos-билет найден для пользователя ${username}${NC}"
+        return 0
+    fi
+
+    echo -e "${YELLOW}Kerberos-билет для ${username} не найден${NC}"
+    read -rp "Получить билет через kinit ${principal}? (y/n): " kinit_answer
+    if [[ "$kinit_answer" == "y" || "$kinit_answer" == "Y" ]]; then
+        run_as_login_user "$username" kinit "$principal"
+        return $?
+    fi
+
+    echo -e "${RED}Без Kerberos-билета доменное монтирование может не выполниться${NC}"
+    return 1
+}
+
+build_kerberos_mount_options() {
+    local user_uid="$1"
+
+    echo "sec=krb5,cruid=${user_uid},multiuser,nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
 }
 
 # ─── Создание файла учётных данных ───────────────────────────────────────
@@ -168,15 +267,23 @@ add_to_fstab_entry() {
     local mount_name="$3"
     local cred_file="$4"
     local is_domain="$5"
+    local auth_mode="${6:-credentials}"
+    local user_uid="${7:-}"
 
     local mount_point="${MOUNT_BASE}/${mount_name}/"
-    local extra_opts="nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
+    local fstab_opts=""
 
-    if [[ "$is_domain" == "1" ]]; then
-        extra_opts="${extra_opts},nofail"
+    if [[ "$auth_mode" == "kerberos" ]]; then
+        fstab_opts="$(build_kerberos_mount_options "$user_uid")"
+    else
+        fstab_opts="credentials=${cred_file},nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
     fi
 
-    local fstab_entry="//${server}/${share} ${mount_point} cifs credentials=${cred_file},${extra_opts} 0 0"
+    if [[ "$is_domain" == "1" ]]; then
+        fstab_opts="${fstab_opts},nofail"
+    fi
+
+    local fstab_entry="//${server}/${share} ${mount_point} cifs ${fstab_opts} 0 0"
 
     if grep -Fq "//${server}/${share} ${mount_point} cifs" "$FSTAB" 2>/dev/null; then
         echo -e "${YELLOW}Запись уже существует в /etc/fstab${NC}"
@@ -186,6 +293,43 @@ add_to_fstab_entry() {
     backup_fstab
     echo "$fstab_entry" >> "$FSTAB"
     echo -e "${GREEN}Запись добавлена в /etc/fstab${NC}"
+}
+
+mount_share_kerberos() {
+    local server="$1"
+    local share="$2"
+    local mount_name="$3"
+    local user_uid="$4"
+    local add_to_fstab="$5"
+
+    local mount_point="${MOUNT_BASE}/${mount_name}"
+    local mount_opts
+    mount_opts="$(build_kerberos_mount_options "$user_uid")"
+
+    if ! validate_mount_name "$mount_name"; then
+        echo -e "${RED}Ошибка: неверное имя точки монтирования: ${mount_name}${NC}"
+        echo "Разрешены только буквы, цифры, точка, подчёркивание и дефис"
+        return 1
+    fi
+
+    mkdir -p "$mount_point"
+
+    echo -e "${BLUE}Монтирование //${server}/${share} -> ${mount_point} через Kerberos${NC}"
+
+    if mount -t cifs "//${server}/${share}" "$mount_point" -o "$mount_opts"; then
+        echo -e "${GREEN}Успешно смонтировано: ${mount_point}${NC}"
+
+        if [[ "$add_to_fstab" == "1" ]]; then
+            add_to_fstab_entry "$server" "$share" "$mount_name" "" "1" "kerberos" "$user_uid"
+        fi
+    else
+        echo -e "${RED}Ошибка монтирования! Проверьте:${NC}"
+        echo "  - Доступность сервера: ping ${server}"
+        echo "  - Kerberos-билет пользователя: klist"
+        echo "  - Ввод компьютера в домен: realm list"
+        echo "  - Сетевое соединение"
+        return 1
+    fi
 }
 
 # ─── Размонтирование ─────────────────────────────────────────────────────
@@ -408,6 +552,48 @@ interactive_add() {
         echo "Разрешены только буквы, цифры, точка, подчёркивание и дефис"
         return 1
     fi
+
+    read -rp "Использовать доменную авторизацию текущего пользователя (Kerberos)? (y/n): " kerberos_answer
+    if [[ "$kerberos_answer" == "y" || "$kerberos_answer" == "Y" ]]; then
+        if ! is_domain_joined; then
+            echo -e "${RED}Компьютер не найден в домене. Проверьте: realm list или wbinfo -t${NC}"
+            return 1
+        fi
+
+        local login_user
+        login_user=$(get_login_user)
+        local user_uid
+        user_uid=$(id -u "$login_user")
+        local domain
+        domain=$(detect_domain_name)
+
+        if [[ -z "$domain" ]]; then
+            read -rp "Домен Kerberos (например, example.local): " domain
+        else
+            read -rp "Домен Kerberos [${domain}]: " domain_answer
+            domain="${domain_answer:-$domain}"
+        fi
+
+        if [[ -z "$domain" ]]; then
+            echo -e "${RED}Домен не указан${NC}"
+            return 1
+        fi
+
+        if ! ensure_kerberos_ticket "$login_user" "$domain"; then
+            return 1
+        fi
+
+        read -rp "Добавить в /etc/fstab? (y/n): " add_fstab_answer
+        local add_to_fstab="0"
+        if [[ "$add_fstab_answer" == "y" || "$add_fstab_answer" == "Y" ]]; then
+            add_to_fstab="1"
+            echo -e "${YELLOW}Важно: запись с sec=krb5 требует Kerberos-билет пользователя после входа в систему${NC}"
+        fi
+
+        mount_share_kerberos "$server" "$share" "$mount_name" "$user_uid" "$add_to_fstab"
+        return $?
+    fi
+
     read -rp "Имя пользователя: " username
     read -rsp "Пароль: " password
     echo ""
@@ -529,6 +715,10 @@ show_help() {
 
 # ─── Основная логика ─────────────────────────────────────────────────────
 main() {
+    if [[ "${MOUNT_MANAGER_TESTING:-0}" == "1" ]]; then
+        return 0
+    fi
+
     check_root
     check_dependencies
 
