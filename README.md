@@ -99,6 +99,7 @@ sudo dnf install krb5-workstation realmd samba-common-tools keyutils
 sudo ./usb-guard.sh --scan
 sudo ./usb-guard.sh --whitelist
 sudo ./usb-guard.sh --whitelist-auth
+sudo ./usb-guard.sh --block-whitelist
 sudo ./usb-guard.sh --block-all
 sudo ./usb-guard.sh --unblock
 sudo ./usb-guard.sh --show
@@ -114,8 +115,16 @@ sudo ./usb-guard.sh --show
 - сканирует именно USB-блочные устройства через `/sys/block`;
 - поддерживает драйверы `usb-storage` и `uas`;
 - whitelist по нескольким атрибутам создаётся одной `udev`-строкой, то есть атрибуты проверяются совместно;
+- режим `--block-whitelist` блокирует все USB-накопители через `UDISKS_IGNORE`, но сохраняет уже добавленные разрешающие правила белого списка;
+- режим `--block-all` блокирует все USB-накопители без исключений и перезаписывает правила;
 - перед перезаписью `/usr/bin/remove_usb.sh` создаёт backup;
 - после изменения правил перезагружает `udev` и рекомендует переподключить USB-устройства.
+
+Рекомендуемый порядок для режима белого списка:
+
+1. Просканировать устройства: `sudo ./usb-guard.sh --scan`.
+2. Добавить разрешённое устройство: `sudo ./usb-guard.sh --whitelist`.
+3. Включить блокировку всех остальных USB-накопителей: `sudo ./usb-guard.sh --block-whitelist`.
 
 Файлы, которые может менять скрипт:
 

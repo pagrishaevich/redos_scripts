@@ -18,7 +18,8 @@
 #       --scan            Сканировать USB-устройства
 #       --whitelist       Добавить устройство в белый список (UDISKS_IGNORE)
 #       --whitelist-auth  Добавить устройство в белый список (authorized)
-#       --block-all       Блокировать все USB-накопители (UDISKS_IGNORE)
+#       --block-whitelist Блокировать все USB-накопители, кроме белого списка (UDISKS_IGNORE)
+#       --block-all       Блокировать все USB-накопители без исключений (UDISKS_IGNORE)
 #       --unblock         Разблокировать все USB-накопители
 #       --show            Показать текущие правила и статус
 #
@@ -269,9 +270,9 @@ apply_rules() {
     echo -e "${YELLOW}Рекомендуется переподключить USB-устройства${NC}"
 }
 
-# ─── Блокировка всех USB (UDISKS_IGNORE) ─────────────────────────────────
+# ─── Блокировка всех USB без исключений (UDISKS_IGNORE) ──────────────────
 block_all_usb() {
-    echo -e "${BLUE}=== Блокировка всех USB-накопителей (UDISKS_IGNORE) ===${NC}"
+    echo -e "${BLUE}=== Блокировка всех USB-накопителей без исключений (UDISKS_IGNORE) ===${NC}"
     echo ""
 
     local usb3
@@ -290,6 +291,57 @@ block_all_usb() {
     fi
 
     generate_block_all_udisks > "$UDEV_RULE_FILE"
+    echo -e "${GREEN}Правила записаны: ${UDEV_RULE_FILE}${NC}"
+    echo ""
+    echo -e "${BLUE}Содержимое:${NC}"
+    while IFS= read -r line; do
+        echo -e "  ${CYAN}${line}${NC}"
+    done < "$UDEV_RULE_FILE"
+    echo ""
+
+    apply_rules
+}
+
+# ─── Блокировка всех USB, кроме белого списка (UDISKS_IGNORE) ────────────
+block_except_whitelist_usb() {
+    echo -e "${BLUE}=== Блокировка всех USB-накопителей, кроме белого списка (UDISKS_IGNORE) ===${NC}"
+    echo ""
+
+    if [[ ! -f "$UDEV_RULE_FILE" ]]; then
+        echo -e "${RED}Файл правил не найден: ${UDEV_RULE_FILE}${NC}"
+        echo -e "${YELLOW}Сначала добавьте устройство в белый список через пункт 2${NC}"
+        return 0
+    fi
+
+    if ! grep -q 'ENV{UDISKS_IGNORE}="0"' "$UDEV_RULE_FILE" 2>/dev/null; then
+        echo -e "${RED}В текущих правилах нет устройств из белого списка UDISKS_IGNORE${NC}"
+        echo -e "${YELLOW}Сначала добавьте разрешённое устройство через пункт 2${NC}"
+        return 0
+    fi
+
+    local backup="${UDEV_RULE_FILE}.bak.$(date +%Y%m%d_%H%M%S)"
+    cp "$UDEV_RULE_FILE" "$backup"
+    echo -e "${YELLOW}Текущие правила сохранены: ${backup}${NC}"
+
+    local block_usb_storage='ENV{ID_USB_DRIVER}=="usb-storage",ENV{UDISKS_IGNORE}="1"'
+    local block_uas='ENV{ID_USB_DRIVER}=="uas",ENV{UDISKS_IGNORE}="1"'
+    local tmp_file
+    tmp_file=$(mktemp)
+
+    echo "$block_usb_storage" > "$tmp_file"
+    echo "$block_uas" >> "$tmp_file"
+
+    while IFS= read -r line; do
+        case "$line" in
+            "$block_usb_storage"|"$block_uas") continue ;;
+        esac
+        echo "$line" >> "$tmp_file"
+    done < "$UDEV_RULE_FILE"
+
+    cp "$tmp_file" "$UDEV_RULE_FILE"
+    rm -f "$tmp_file"
+
+    echo -e "${GREEN}Режим белого списка включён: все USB-накопители блокируются, кроме разрешённых правил${NC}"
     echo -e "${GREEN}Правила записаны: ${UDEV_RULE_FILE}${NC}"
     echo ""
     echo -e "${BLUE}Содержимое:${NC}"
@@ -624,10 +676,11 @@ main_menu() {
         echo "  1) Сканировать USB-устройства"
         echo "  2) Добавить устройство в белый список (UDISKS_IGNORE)"
         echo "  3) Добавить устройство в белый список (authorized)"
-        echo "  4) Блокировать все USB (UDISKS_IGNORE)"
-        echo "  5) Разблокировать все USB"
-        echo "  6) Просмотреть текущие правила"
-        echo "  7) Выход"
+        echo "  4) Блокировать все USB, кроме белого списка (UDISKS_IGNORE)"
+        echo "  5) Блокировать все USB без исключений (UDISKS_IGNORE)"
+        echo "  6) Разблокировать все USB"
+        echo "  7) Просмотреть текущие правила"
+        echo "  8) Выход"
         echo ""
         read -rp "Выбор: " choice
 
@@ -635,10 +688,11 @@ main_menu() {
             1) scan_usb_devices ;;
             2) whitelist_udisks ;;
             3) whitelist_authorized ;;
-            4) block_all_usb ;;
-            5) unblock_all_usb ;;
-            6) show_rules ;;
-            7) echo "Выход..."; exit 0 ;;
+            4) block_except_whitelist_usb ;;
+            5) block_all_usb ;;
+            6) unblock_all_usb ;;
+            7) show_rules ;;
+            8) echo "Выход..."; exit 0 ;;
             *) echo -e "${RED}Неверный выбор${NC}" ;;
         esac
     done
@@ -652,7 +706,8 @@ show_help() {
     echo "  --scan             Сканировать USB-устройства"
     echo "  --whitelist        Добавить устройство в белый список (UDISKS_IGNORE)"
     echo "  --whitelist-auth   Добавить устройство в белый список (authorized)"
-    echo "  --block-all        Блокировать все USB-накопители (UDISKS_IGNORE)"
+    echo "  --block-whitelist  Блокировать все USB-накопители, кроме белого списка (UDISKS_IGNORE)"
+    echo "  --block-all        Блокировать все USB-накопители без исключений (UDISKS_IGNORE)"
     echo "  --unblock          Разблокировать все USB-накопители"
     echo "  --show             Показать текущие правила и статус"
     echo "  --help, -h         Эта справка"
@@ -670,7 +725,8 @@ show_help() {
     echo "Порядок работы:"
     echo "  1. Сканировать устройства (пункт 1 / --scan)"
     echo "  2. Добавить нужное устройство в белый список (пункт 2 или 3)"
-    echo "  3. При необходимости заблокировать все остальные (пункт 4)"
+    echo "  3. Заблокировать все остальные, сохранив белый список (пункт 4 / --block-whitelist)"
+    echo "  4. Пункт 5 / --block-all блокирует все USB-накопители без исключений"
 }
 
 # ─── Основная логика ─────────────────────────────────────────────────────
@@ -683,6 +739,7 @@ main() {
             --scan)           scan_usb_devices ;;
             --whitelist)      whitelist_udisks ;;
             --whitelist-auth) whitelist_authorized ;;
+            --block-whitelist) block_except_whitelist_usb ;;
             --block-all)      block_all_usb ;;
             --unblock)        unblock_all_usb ;;
             --show)           show_rules ;;
