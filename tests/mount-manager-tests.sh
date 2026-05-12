@@ -162,6 +162,54 @@ test_fstab_entry_is_updated_when_share_already_exists() {
   rm -f "$tmp_fstab"
 }
 
+test_busy_mount_point_is_unmounted_before_mounting() {
+  local calls=""
+
+  mountpoint() {
+    [[ "$1" == "-q" && "$2" == "/mnt/scan" ]]
+  }
+  findmnt() {
+    echo "//old/server"
+  }
+  read() {
+    local var_name="${@: -1}"
+    printf -v "$var_name" '%s' 'y'
+  }
+  umount() {
+    calls="${calls} umount:$1"
+  }
+
+  MOUNT_MANAGER_TESTING=1 source "$SCRIPT"
+  ensure_mount_point_available "/mnt/scan" >/dev/null
+
+  assert_contains "$calls" "umount:/mnt/scan"
+}
+
+test_fstab_update_reloads_systemd_daemon() {
+  local tmp_fstab
+  tmp_fstab="$(mktemp)"
+  local calls=""
+
+  printf '%s\n' '//srv/share /mnt/share/ cifs credentials=/old,iocharset=utf8 0 0' > "$tmp_fstab"
+
+  MOUNT_MANAGER_TESTING=1 source "$SCRIPT"
+  FSTAB="$tmp_fstab"
+  MOUNT_BASE="/mnt"
+  backup_fstab() { :; }
+  command() {
+    [[ "$1" == "-v" && "$2" == "systemctl" ]]
+  }
+  systemctl() {
+    calls="${calls} systemctl:$*"
+  }
+
+  add_to_fstab_entry "srv" "share" "share" "/root/.smbuser_test" "0" "credentials" "1000" "1001" >/dev/null
+
+  assert_contains "$calls" "systemctl:daemon-reload"
+
+  rm -f "$tmp_fstab"
+}
+
 test_kerberos_mount_options_use_current_user_uid
 test_credentials_mount_options_use_login_user_owner
 test_mount_owner_prompts_when_running_as_root
@@ -171,5 +219,7 @@ test_kerberos_server_ip_resolves_to_fqdn
 test_kerberos_server_name_keeps_hostname
 test_kerberos_server_ip_prompts_for_fqdn_when_reverse_dns_missing
 test_fstab_entry_is_updated_when_share_already_exists
+test_busy_mount_point_is_unmounted_before_mounting
+test_fstab_update_reloads_systemd_daemon
 
 echo "PASS: mount-manager"

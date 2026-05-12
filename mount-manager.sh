@@ -65,6 +65,12 @@ validate_mount_name() {
     [[ -n "$mount_name" && "$mount_name" != "." && "$mount_name" != ".." && "$mount_name" =~ ^[A-Za-z0-9._-]+$ ]]
 }
 
+reload_systemd_daemon() {
+    if command -v systemctl &>/dev/null; then
+        systemctl daemon-reload || echo -e "${YELLOW}Предупреждение: не удалось выполнить systemctl daemon-reload${NC}"
+    fi
+}
+
 # ─── Проверка прав root ──────────────────────────────────────────────────
 check_root() {
     if [ "$(id -u)" -ne 0 ]; then
@@ -238,6 +244,39 @@ build_credentials_mount_options() {
     echo "credentials=${cred_file},$(build_common_mount_options "$user_uid" "$user_gid")"
 }
 
+ensure_mount_point_available() {
+    local mount_point="$1"
+
+    if ! mountpoint -q "$mount_point" 2>/dev/null; then
+        return 0
+    fi
+
+    local current_source=""
+    if command -v findmnt &>/dev/null; then
+        current_source=$(findmnt -n -o SOURCE --target "$mount_point" 2>/dev/null || true)
+    fi
+
+    if [[ -n "$current_source" ]]; then
+        echo -e "${YELLOW}Точка уже смонтирована: ${mount_point} (${current_source})${NC}"
+    else
+        echo -e "${YELLOW}Точка уже смонтирована: ${mount_point}${NC}"
+    fi
+
+    read -rp "Размонтировать ${mount_point} и продолжить? (y/n): " remount_answer
+    if [[ "$remount_answer" != "y" && "$remount_answer" != "Y" ]]; then
+        echo -e "${YELLOW}Монтирование пропущено: ${mount_point} уже занят${NC}"
+        return 1
+    fi
+
+    if umount "$mount_point"; then
+        echo -e "${GREEN}Размонтировано: ${mount_point}${NC}"
+        return 0
+    fi
+
+    echo -e "${RED}Не удалось размонтировать ${mount_point}. Проверьте занятые процессы: fuser -vm ${mount_point}${NC}"
+    return 1
+}
+
 build_kerberos_mount_options() {
     local user_uid="$1"
     local user_gid="$2"
@@ -370,6 +409,9 @@ mount_share() {
     fi
 
     mkdir -p "$mount_point"
+    if ! ensure_mount_point_available "$mount_point"; then
+        return 1
+    fi
 
     echo -e "${BLUE}Монтирование //${server}/${share} -> ${mount_point}${NC}"
 
@@ -427,12 +469,14 @@ add_to_fstab_entry() {
         backup_fstab
         sed -i "\|//${server}/${share} ${mount_point} cifs|d" "$FSTAB"
         echo "$fstab_entry" >> "$FSTAB"
+        reload_systemd_daemon
         echo -e "${GREEN}Запись обновлена в /etc/fstab${NC}"
         return 0
     fi
 
     backup_fstab
     echo "$fstab_entry" >> "$FSTAB"
+    reload_systemd_daemon
     echo -e "${GREEN}Запись добавлена в /etc/fstab${NC}"
 }
 
@@ -455,6 +499,9 @@ mount_share_kerberos() {
     fi
 
     mkdir -p "$mount_point"
+    if ! ensure_mount_point_available "$mount_point"; then
+        return 1
+    fi
 
     echo -e "${BLUE}Монтирование //${server}/${share} -> ${mount_point} через Kerberos${NC}"
 
@@ -579,6 +626,7 @@ remove_from_fstab() {
     if grep -Fq " ${mount_point} cifs " "$FSTAB"; then
         backup_fstab
         sed -i "\|${mount_point}|d" "$FSTAB"
+        reload_systemd_daemon
         echo -e "${GREEN}Запись удалена из /etc/fstab${NC}"
     else
         echo -e "${YELLOW}Запись не найдена в /etc/fstab${NC}"
