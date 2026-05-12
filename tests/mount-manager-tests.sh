@@ -26,12 +26,30 @@ assert_contains() {
 test_kerberos_mount_options_use_current_user_uid() {
   local output
 
-  output="$(MOUNT_MANAGER_TESTING=1 source "$SCRIPT"; build_kerberos_mount_options 1000)"
+  output="$(MOUNT_MANAGER_TESTING=1 source "$SCRIPT"; build_kerberos_mount_options 1000 1001)"
 
   assert_contains "$output" "sec=krb5"
   assert_contains "$output" "cruid=1000"
+  assert_contains "$output" "uid=1000"
+  assert_contains "$output" "gid=1001"
+  assert_contains "$output" "forceuid"
+  assert_contains "$output" "forcegid"
   assert_contains "$output" "multiuser"
   [[ "$output" != *"credentials="* ]] || fail "Kerberos-режим не должен использовать credentials-файл"
+}
+
+test_credentials_mount_options_use_login_user_owner() {
+  local output
+
+  output="$(MOUNT_MANAGER_TESTING=1 source "$SCRIPT"; build_credentials_mount_options "/root/.smbuser_test" 1000 1001)"
+
+  assert_contains "$output" "credentials=/root/.smbuser_test"
+  assert_contains "$output" "uid=1000"
+  assert_contains "$output" "gid=1001"
+  assert_contains "$output" "forceuid"
+  assert_contains "$output" "forcegid"
+  assert_contains "$output" "file_mode=0770"
+  assert_contains "$output" "dir_mode=0770"
 }
 
 test_domain_mode_detects_realm_membership() {
@@ -82,10 +100,35 @@ test_kerberos_server_name_keeps_hostname() {
   assert_equals "fs01.yg.loc" "$server"
 }
 
+test_fstab_entry_is_updated_when_share_already_exists() {
+  local tmp_fstab
+  tmp_fstab="$(mktemp)"
+
+  printf '%s\n' '//srv/share /mnt/share/ cifs credentials=/old,iocharset=utf8 0 0' > "$tmp_fstab"
+
+  MOUNT_MANAGER_TESTING=1 source "$SCRIPT"
+  FSTAB="$tmp_fstab"
+  MOUNT_BASE="/mnt"
+  backup_fstab() { :; }
+
+  add_to_fstab_entry "srv" "share" "share" "/root/.smbuser_test" "0" "credentials" "1000" "1001" >/dev/null
+
+  local content
+  content="$(cat "$tmp_fstab")"
+
+  assert_contains "$content" "uid=1000"
+  assert_contains "$content" "gid=1001"
+  [[ "$(grep -c '^//srv/share /mnt/share/ cifs' "$tmp_fstab")" -eq 1 ]] || fail "запись fstab должна быть одна"
+
+  rm -f "$tmp_fstab"
+}
+
 test_kerberos_mount_options_use_current_user_uid
+test_credentials_mount_options_use_login_user_owner
 test_domain_mode_detects_realm_membership
 test_kerberos_principal_uses_domain_suffix
 test_kerberos_server_ip_resolves_to_fqdn
 test_kerberos_server_name_keeps_hostname
+test_fstab_entry_is_updated_when_share_already_exists
 
 echo "PASS: mount-manager"

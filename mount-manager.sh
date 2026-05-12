@@ -104,6 +104,14 @@ get_login_user() {
     fi
 }
 
+get_login_uid() {
+    id -u "$(get_login_user)"
+}
+
+get_login_gid() {
+    id -g "$(get_login_user)"
+}
+
 is_domain_joined() {
     if command -v realm &>/dev/null && realm list 2>/dev/null | grep -q .; then
         return 0
@@ -184,10 +192,26 @@ ensure_kerberos_ticket() {
     return 1
 }
 
+build_common_mount_options() {
+    local user_uid="$1"
+    local user_gid="$2"
+
+    echo "uid=${user_uid},gid=${user_gid},forceuid,forcegid,nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
+}
+
+build_credentials_mount_options() {
+    local cred_file="$1"
+    local user_uid="$2"
+    local user_gid="$3"
+
+    echo "credentials=${cred_file},$(build_common_mount_options "$user_uid" "$user_gid")"
+}
+
 build_kerberos_mount_options() {
     local user_uid="$1"
+    local user_gid="$2"
 
-    echo "sec=krb5,cruid=${user_uid},multiuser,nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
+    echo "sec=krb5,cruid=${user_uid},multiuser,$(build_common_mount_options "$user_uid" "$user_gid")"
 }
 
 is_ipv4_address() {
@@ -269,7 +293,12 @@ mount_share() {
     local add_to_fstab="$6"
 
     local mount_point="${MOUNT_BASE}/${mount_name}"
-    local extra_opts="nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
+    local user_uid
+    user_uid=$(get_login_uid)
+    local user_gid
+    user_gid=$(get_login_gid)
+    local mount_opts
+    mount_opts="$(build_credentials_mount_options "$cred_file" "$user_uid" "$user_gid")"
 
     if ! validate_mount_name "$mount_name"; then
         echo -e "${RED}Ошибка: неверное имя точки монтирования: ${mount_name}${NC}"
@@ -278,12 +307,10 @@ mount_share() {
     fi
 
     if [[ "$is_domain" == "1" ]]; then
-        extra_opts="${extra_opts},nofail"
+        mount_opts="${mount_opts},nofail"
     fi
 
     mkdir -p "$mount_point"
-
-    local mount_opts="credentials=${cred_file},${extra_opts}"
 
     echo -e "${BLUE}Монтирование //${server}/${share} -> ${mount_point}${NC}"
 
@@ -291,7 +318,7 @@ mount_share() {
         echo -e "${GREEN}Успешно смонтировано: ${mount_point}${NC}"
 
         if [[ "$add_to_fstab" == "1" ]]; then
-            add_to_fstab_entry "$server" "$share" "$mount_name" "$cred_file" "$is_domain"
+            add_to_fstab_entry "$server" "$share" "$mount_name" "$cred_file" "$is_domain" "credentials" "$user_uid" "$user_gid"
         fi
     else
         echo -e "${RED}Ошибка монтирования! Проверьте:${NC}"
@@ -311,14 +338,23 @@ add_to_fstab_entry() {
     local is_domain="$5"
     local auth_mode="${6:-credentials}"
     local user_uid="${7:-}"
+    local user_gid="${8:-}"
 
     local mount_point="${MOUNT_BASE}/${mount_name}/"
     local fstab_opts=""
 
+    if [[ -z "$user_uid" ]]; then
+        user_uid=$(get_login_uid)
+    fi
+
+    if [[ -z "$user_gid" ]]; then
+        user_gid=$(get_login_gid)
+    fi
+
     if [[ "$auth_mode" == "kerberos" ]]; then
-        fstab_opts="$(build_kerberos_mount_options "$user_uid")"
+        fstab_opts="$(build_kerberos_mount_options "$user_uid" "$user_gid")"
     else
-        fstab_opts="credentials=${cred_file},nobrl,iocharset=utf8,file_mode=0770,dir_mode=0770"
+        fstab_opts="$(build_credentials_mount_options "$cred_file" "$user_uid" "$user_gid")"
     fi
 
     if [[ "$is_domain" == "1" ]]; then
@@ -328,7 +364,10 @@ add_to_fstab_entry() {
     local fstab_entry="//${server}/${share} ${mount_point} cifs ${fstab_opts} 0 0"
 
     if grep -Fq "//${server}/${share} ${mount_point} cifs" "$FSTAB" 2>/dev/null; then
-        echo -e "${YELLOW}Запись уже существует в /etc/fstab${NC}"
+        backup_fstab
+        sed -i "\|//${server}/${share} ${mount_point} cifs|d" "$FSTAB"
+        echo "$fstab_entry" >> "$FSTAB"
+        echo -e "${GREEN}Запись обновлена в /etc/fstab${NC}"
         return 0
     fi
 
@@ -342,11 +381,12 @@ mount_share_kerberos() {
     local share="$2"
     local mount_name="$3"
     local user_uid="$4"
-    local add_to_fstab="$5"
+    local user_gid="$5"
+    local add_to_fstab="$6"
 
     local mount_point="${MOUNT_BASE}/${mount_name}"
     local mount_opts
-    mount_opts="$(build_kerberos_mount_options "$user_uid")"
+    mount_opts="$(build_kerberos_mount_options "$user_uid" "$user_gid")"
 
     if ! validate_mount_name "$mount_name"; then
         echo -e "${RED}Ошибка: неверное имя точки монтирования: ${mount_name}${NC}"
@@ -362,7 +402,7 @@ mount_share_kerberos() {
         echo -e "${GREEN}Успешно смонтировано: ${mount_point}${NC}"
 
         if [[ "$add_to_fstab" == "1" ]]; then
-            add_to_fstab_entry "$server" "$share" "$mount_name" "" "1" "kerberos" "$user_uid"
+            add_to_fstab_entry "$server" "$share" "$mount_name" "" "1" "kerberos" "$user_uid" "$user_gid"
         fi
     else
         echo -e "${RED}Ошибка монтирования! Проверьте:${NC}"
@@ -606,6 +646,8 @@ interactive_add() {
         login_user=$(get_login_user)
         local user_uid
         user_uid=$(id -u "$login_user")
+        local user_gid
+        user_gid=$(id -g "$login_user")
         local domain
         domain=$(detect_domain_name)
 
@@ -642,7 +684,7 @@ interactive_add() {
             echo -e "${YELLOW}Важно: запись с sec=krb5 требует Kerberos-билет пользователя после входа в систему${NC}"
         fi
 
-        mount_share_kerberos "$server" "$share" "$mount_name" "$user_uid" "$add_to_fstab"
+        mount_share_kerberos "$server" "$share" "$mount_name" "$user_uid" "$user_gid" "$add_to_fstab"
         return $?
     fi
 
