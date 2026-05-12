@@ -283,6 +283,26 @@ resolve_kerberos_server_name() {
     echo "$resolved"
 }
 
+select_kerberos_server_name() {
+    local server="$1"
+    local resolved=""
+
+    if resolved=$(resolve_kerberos_server_name "$server"); then
+        echo "$resolved"
+        return 0
+    fi
+
+    local manual_server=""
+    read -rp "DNS-имя/FQDN SMB-сервера для Kerberos: " manual_server
+
+    if [[ -z "$manual_server" ]] || is_ipv4_address "$manual_server"; then
+        echo -e "${RED}Для Kerberos нужно указать DNS-имя или FQDN, не IP-адрес${NC}" >&2
+        return 1
+    fi
+
+    echo "$manual_server"
+}
+
 # ─── Создание файла учётных данных ───────────────────────────────────────
 create_credentials_file() {
     local username="$1"
@@ -709,7 +729,7 @@ interactive_add() {
         fi
 
         local kerberos_server
-        if ! kerberos_server=$(resolve_kerberos_server_name "$server"); then
+        if ! kerberos_server=$(select_kerberos_server_name "$server"); then
             return 1
         fi
 

@@ -121,6 +121,24 @@ test_kerberos_server_name_keeps_hostname() {
   assert_equals "fs01.yg.loc" "$server"
 }
 
+test_kerberos_server_ip_prompts_for_fqdn_when_reverse_dns_missing() {
+  getent() {
+    return 1
+  }
+
+  read() {
+    local var_name="${@: -1}"
+    printf -v "$var_name" '%s' 'scan.yg.loc'
+  }
+
+  local server
+
+  MOUNT_MANAGER_TESTING=1 source "$SCRIPT"
+  server="$(select_kerberos_server_name "10.82.101.211" 2>/dev/null)"
+
+  assert_equals "scan.yg.loc" "$server"
+}
+
 test_fstab_entry_is_updated_when_share_already_exists() {
   local tmp_fstab
   tmp_fstab="$(mktemp)"
@@ -151,6 +169,7 @@ test_domain_mode_detects_realm_membership
 test_kerberos_principal_uses_domain_suffix
 test_kerberos_server_ip_resolves_to_fqdn
 test_kerberos_server_name_keeps_hostname
+test_kerberos_server_ip_prompts_for_fqdn_when_reverse_dns_missing
 test_fstab_entry_is_updated_when_share_already_exists
 
 echo "PASS: mount-manager"
