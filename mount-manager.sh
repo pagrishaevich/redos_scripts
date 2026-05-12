@@ -112,6 +112,37 @@ get_login_gid() {
     id -g "$(get_login_user)"
 }
 
+resolve_mount_owner() {
+    local owner="${1:-}"
+
+    if [[ -z "$owner" ]]; then
+        owner=$(get_login_user)
+    fi
+
+    if [[ "$owner" == "root" || -z "$owner" ]]; then
+        read -rp "Локальный пользователь, которому дать доступ к mount-point: " owner
+    fi
+
+    if [[ -z "$owner" || "$owner" == "root" ]]; then
+        echo -e "${RED}Нужно указать обычного локального пользователя, не root${NC}" >&2
+        return 1
+    fi
+
+    local owner_uid
+    if ! owner_uid=$(id -u "$owner" 2>/dev/null); then
+        echo -e "${RED}Пользователь не найден: ${owner}${NC}" >&2
+        return 1
+    fi
+
+    local owner_gid
+    if ! owner_gid=$(id -g "$owner" 2>/dev/null); then
+        echo -e "${RED}Не удалось определить группу пользователя: ${owner}${NC}" >&2
+        return 1
+    fi
+
+    echo "${owner}:${owner_uid}:${owner_gid}"
+}
+
 is_domain_joined() {
     if command -v realm &>/dev/null && realm list 2>/dev/null | grep -q .; then
         return 0
@@ -291,12 +322,20 @@ mount_share() {
     local cred_file="$4"
     local is_domain="$5"
     local add_to_fstab="$6"
+    local user_uid="${7:-}"
+    local user_gid="${8:-}"
 
     local mount_point="${MOUNT_BASE}/${mount_name}"
-    local user_uid
-    user_uid=$(get_login_uid)
-    local user_gid
-    user_gid=$(get_login_gid)
+    if [[ -z "$user_uid" || -z "$user_gid" ]]; then
+        local owner_info
+        local owner_user
+        if ! owner_info=$(resolve_mount_owner); then
+            return 1
+        fi
+        IFS=':' read -r owner_user user_uid user_gid <<< "$owner_info"
+        echo -e "${BLUE}Локальный владелец mount-point: ${owner_user} (${user_uid}:${user_gid})${NC}"
+    fi
+
     local mount_opts
     mount_opts="$(build_credentials_mount_options "$cred_file" "$user_uid" "$user_gid")"
 
@@ -343,12 +382,13 @@ add_to_fstab_entry() {
     local mount_point="${MOUNT_BASE}/${mount_name}/"
     local fstab_opts=""
 
-    if [[ -z "$user_uid" ]]; then
-        user_uid=$(get_login_uid)
-    fi
-
-    if [[ -z "$user_gid" ]]; then
-        user_gid=$(get_login_gid)
+    if [[ -z "$user_uid" || -z "$user_gid" ]]; then
+        local owner_info
+        local owner_user
+        if ! owner_info=$(resolve_mount_owner); then
+            return 1
+        fi
+        IFS=':' read -r owner_user user_uid user_gid <<< "$owner_info"
     fi
 
     if [[ "$auth_mode" == "kerberos" ]]; then
@@ -635,6 +675,13 @@ interactive_add() {
         return 1
     fi
 
+    local owner_info owner_user user_uid user_gid
+    if ! owner_info=$(resolve_mount_owner); then
+        return 1
+    fi
+    IFS=':' read -r owner_user user_uid user_gid <<< "$owner_info"
+    echo -e "${BLUE}Локальный владелец mount-point: ${owner_user} (${user_uid}:${user_gid})${NC}"
+
     read -rp "Использовать доменную авторизацию текущего пользователя (Kerberos)? (y/n): " kerberos_answer
     if [[ "$kerberos_answer" == "y" || "$kerberos_answer" == "Y" ]]; then
         if ! is_domain_joined; then
@@ -642,12 +689,6 @@ interactive_add() {
             return 1
         fi
 
-        local login_user
-        login_user=$(get_login_user)
-        local user_uid
-        user_uid=$(id -u "$login_user")
-        local user_gid
-        user_gid=$(id -g "$login_user")
         local domain
         domain=$(detect_domain_name)
 
@@ -663,7 +704,7 @@ interactive_add() {
             return 1
         fi
 
-        if ! ensure_kerberos_ticket "$login_user" "$domain"; then
+        if ! ensure_kerberos_ticket "$owner_user" "$domain"; then
             return 1
         fi
 
@@ -711,7 +752,7 @@ interactive_add() {
     local cred_file
     cred_file=$(create_credentials_file "$username" "$password" "$domain")
 
-    mount_share "$server" "$share" "$mount_name" "$cred_file" "$is_domain" "$add_to_fstab"
+    mount_share "$server" "$share" "$mount_name" "$cred_file" "$is_domain" "$add_to_fstab" "$user_uid" "$user_gid"
 
     if [[ "$save_config_answer" == "y" || "$save_config_answer" == "Y" ]]; then
         save_to_config "$mount_name" "$server" "$share" "$username" "$password" "$domain" "$is_domain"

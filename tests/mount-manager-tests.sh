@@ -52,6 +52,27 @@ test_credentials_mount_options_use_login_user_owner() {
   assert_contains "$output" "dir_mode=0770"
 }
 
+test_mount_owner_prompts_when_running_as_root() {
+  local output
+
+  output="$(MOUNT_MANAGER_TESTING=1 source "$SCRIPT";
+    get_login_user() { echo root; }
+    id() {
+      if [[ "$1" == "-u" && "$2" == "ivan" ]]; then echo 1000; return 0; fi
+      if [[ "$1" == "-g" && "$2" == "ivan" ]]; then echo 1001; return 0; fi
+      if [[ "$1" == "-u" && "$2" == "root" ]]; then echo 0; return 0; fi
+      if [[ "$1" == "-g" && "$2" == "root" ]]; then echo 0; return 0; fi
+      return 1
+    }
+    read() {
+      local var_name="${@: -1}"
+      printf -v "$var_name" '%s' 'ivan'
+    }
+    resolve_mount_owner)"
+
+  assert_contains "$output" "ivan:1000:1001"
+}
+
 test_domain_mode_detects_realm_membership() {
   realm() {
     if [[ "$1" == "list" ]]; then
@@ -125,6 +146,7 @@ test_fstab_entry_is_updated_when_share_already_exists() {
 
 test_kerberos_mount_options_use_current_user_uid
 test_credentials_mount_options_use_login_user_owner
+test_mount_owner_prompts_when_running_as_root
 test_domain_mode_detects_realm_membership
 test_kerberos_principal_uses_domain_suffix
 test_kerberos_server_ip_resolves_to_fqdn
