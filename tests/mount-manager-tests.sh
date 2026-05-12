@@ -210,6 +210,45 @@ test_fstab_update_reloads_systemd_daemon() {
   rm -f "$tmp_fstab"
 }
 
+test_fstab_entry_uses_network_automount_options() {
+  local tmp_fstab
+  tmp_fstab="$(mktemp)"
+
+  MOUNT_MANAGER_TESTING=1 source "$SCRIPT"
+  FSTAB="$tmp_fstab"
+  MOUNT_BASE="/mnt"
+  backup_fstab() { :; }
+  reload_systemd_daemon() { :; }
+
+  add_to_fstab_entry "srv" "share" "share" "/root/.smbuser_test" "0" "credentials" "1000" "1001" >/dev/null
+
+  local content
+  content="$(cat "$tmp_fstab")"
+
+  assert_contains "$content" "_netdev"
+  assert_contains "$content" "nofail"
+  assert_contains "$content" "x-systemd.automount"
+  assert_contains "$content" "x-systemd.requires=network-online.target"
+  assert_contains "$content" "x-systemd.after=network-online.target"
+
+  rm -f "$tmp_fstab"
+}
+
+test_fstab_cifs_detection_allows_leading_spaces() {
+  MOUNT_MANAGER_TESTING=1 source "$SCRIPT"
+
+  is_cifs_fstab_entry "   //10.82.101.211/scan /mnt/scan/ cifs credentials=/root/.smbuser 0 0" || \
+    fail "fstab CIFS-запись с ведущими пробелами должна распознаваться"
+}
+
+test_fstab_cifs_detection_ignores_comments() {
+  MOUNT_MANAGER_TESTING=1 source "$SCRIPT"
+
+  if is_cifs_fstab_entry "# //10.82.101.211/scan /mnt/scan/ cifs credentials=/root/.smbuser 0 0"; then
+    fail "закомментированная CIFS-запись не должна распознаваться как активная"
+  fi
+}
+
 test_kerberos_mount_options_use_current_user_uid
 test_credentials_mount_options_use_login_user_owner
 test_mount_owner_prompts_when_running_as_root
@@ -221,5 +260,8 @@ test_kerberos_server_ip_prompts_for_fqdn_when_reverse_dns_missing
 test_fstab_entry_is_updated_when_share_already_exists
 test_busy_mount_point_is_unmounted_before_mounting
 test_fstab_update_reloads_systemd_daemon
+test_fstab_entry_uses_network_automount_options
+test_fstab_cifs_detection_allows_leading_spaces
+test_fstab_cifs_detection_ignores_comments
 
 echo "PASS: mount-manager"

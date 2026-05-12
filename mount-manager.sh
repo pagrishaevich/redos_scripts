@@ -65,6 +65,12 @@ validate_mount_name() {
     [[ -n "$mount_name" && "$mount_name" != "." && "$mount_name" != ".." && "$mount_name" =~ ^[A-Za-z0-9._-]+$ ]]
 }
 
+is_cifs_fstab_entry() {
+    local line="$1"
+
+    [[ "$line" =~ ^[[:space:]]*//[^[:space:]]+[[:space:]]+[^[:space:]]+[[:space:]]+cifs[[:space:]] ]]
+}
+
 reload_systemd_daemon() {
     if command -v systemctl &>/dev/null; then
         systemctl daemon-reload || echo -e "${YELLOW}Предупреждение: не удалось выполнить systemctl daemon-reload${NC}"
@@ -242,6 +248,12 @@ build_credentials_mount_options() {
     local user_gid="$3"
 
     echo "credentials=${cred_file},$(build_common_mount_options "$user_uid" "$user_gid")"
+}
+
+build_fstab_mount_options() {
+    local mount_opts="$1"
+
+    echo "${mount_opts},_netdev,nofail,x-systemd.automount,x-systemd.requires=network-online.target,x-systemd.after=network-online.target"
 }
 
 ensure_mount_point_available() {
@@ -463,6 +475,8 @@ add_to_fstab_entry() {
         fstab_opts="${fstab_opts},nofail"
     fi
 
+    fstab_opts="$(build_fstab_mount_options "$fstab_opts")"
+
     local fstab_entry="//${server}/${share} ${mount_point} cifs ${fstab_opts} 0 0"
 
     if grep -Fq "//${server}/${share} ${mount_point} cifs" "$FSTAB" 2>/dev/null; then
@@ -590,7 +604,7 @@ list_mounts() {
     if [[ -f "$FSTAB" ]]; then
         local fstab_count=0
         while IFS= read -r line; do
-            if echo "$line" | grep -q "^//.*cifs"; then
+            if is_cifs_fstab_entry "$line"; then
                 echo -e "  ${GREEN}●${NC} $line"
                 ((fstab_count++)) || true
             fi
